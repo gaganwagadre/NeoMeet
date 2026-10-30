@@ -1,0 +1,346 @@
+NEOMEET PROJECT WORKFLOW (Hinglish)
+==================================
+
+1) Project start hota hai kaise?
+--------------------------------
+- User app run karta hai:
+  npm install
+  npm start
+- React app start hota hai aur index.js se App.js render hota hai.
+- App.js me BrowserRouter, ThemeProvider aur AuthProvider wrap hota hai.
+- Routes define hote hain:
+  /         -> LandingPage
+  /auth     -> Authentication page
+  /home     -> HomeComponent
+  /history  -> History page
+  /:url     -> VideoMeetComponent
+
+
+2) Entry point: App.js ka kaam
+------------------------------
+File: src/App.js
+- Sabse pehle BrowserRouter initialize hota hai.
+- ThemeProvider dark/light mode ko manage karta hai.
+- AuthProvider auth state and APIs ko provide karta hai.
+- Routes ke through page navigation hoti hai.
+
+Workflow:
+START
+  |
+  v
+index.js -> App.js
+  |
+  v
+Router + ThemeProvider + AuthProvider
+  |
+  v
+Routes decide page
+
+
+3) Landing page kis time load hoti hai?
+--------------------------------------
+File: src/pages/landing.jsx
+- Jab user / (root route) open karta hai to LandingPage load hota hai.
+- Yaha UI main page hai jisme:
+  - Logo
+  - Theme toggle
+  - Join as Guest
+  - Register
+  - Login
+
+Buttons ka flow:
+- Join as Guest -> router("/aljk23")
+  => direct meeting page open ho jayega.
+  Note: ye guest mode hai, login required nahi.
+
+- Register -> router("/auth?mode=signup")
+  => Authentication page signup mode open hota hai.
+
+- Login -> router("/auth")
+  => Authentication page login mode open hota hai.
+
+Landing page actual user journey:
+LandingPage
+  |
+  +--> /auth?mode=signup  --> Signup form
+  +--> /auth             --> Login form
+  +--> /aljk23           --> Guest join (temporary meeting)
+
+
+4) Login / Signup ka logic kaise hota hai?
+------------------------------------------
+File: src/pages/authentication.jsx
+- Authentication page /auth par load hota hai.
+- URL me mode dekha jata hai:
+  - /auth             => formState = 0 => Sign In
+  - /auth?mode=signup => formState = 1 => Sign Up
+
+Form logic:
+- If formState == 0:
+    user enter karta hai:
+      username
+      password
+    and then handleLogin(username, password) call hota hai
+
+- If formState == 1:
+    user enter karta hai:
+      name
+      username
+      password
+    and then handleRegister(name, username, password) call hota hai
+
+AuthContext se functions access hote hain:
+- handleLogin
+- handleRegister
+
+
+5) AuthContext me actual API call kahaan hoti hai?
+--------------------------------------------------
+File: src/contexts/AuthContext.jsx
+- Ye context app-wide auth management karta hai.
+- axios.create se client banaya gaya hai:
+  baseURL = `${server}/api/v1/users`
+
+Major functions:
+
+1. handleRegister(name, username, password)
+   API call:
+   POST /register
+   body:
+     {
+       name,
+       username,
+       password
+     }
+
+   If status == 201:
+     return request.data.message
+
+   Agar error aata hai:
+     throw err
+
+
+2. handleLogin(username, password)
+   API call:
+   POST /login
+   body:
+     {
+       username,
+       password
+     }
+
+   If status == 200:
+     localStorage.setItem("token", request.data.token)
+     router("/home")
+
+   Means login successful hone ke baad token localStorage me save hota hai aur user /home par navigate ho jata hai.
+
+
+3. getHistoryOfUser()
+   API call:
+   GET /get_all_activity
+   params:
+     token: localStorage.getItem("token")
+
+   return history data
+
+
+4. addToUserHistory(meetingCode)
+   API call:
+   POST /add_to_activity
+   body:
+     {
+       token: localStorage.getItem("token"),
+       meeting_code: meetingCode
+     }
+
+   Iska use Home screen me meeting join karte waqt hota hai.
+
+
+6) Login successful hone ke baad kya hota hai?
+----------------------------------------------
+- handleLogin() successful hone ke baad user /home route par chala jata hai.
+- Home page only login user ke liye accessible hona chahiye.
+- Iske liye withAuth HOC use hota hai.
+
+File: src/utils/withAuth.jsx
+- withAuth(WrappedComponent) ek higher-order component hai.
+- Ye check karta hai:
+  localStorage.getItem("token")
+
+- Agar token missing hai:
+    router("/auth")
+
+- Agar token present hai:
+    wrapped component render hota hai
+
+This means:
+HomeComponent = withAuth(HomeComponent)
+
+So /home route open karne se pehle auth check hota hai.
+
+
+7) Home page workflow
+---------------------
+File: src/pages/home.jsx
+- /home route load hota hai.
+- withAuth wrap se is page par access allowed only if token exists.
+
+Home page par user sees:
+- top bar
+  - Theme toggle
+  - History icon
+  - Logout
+- Meeting code input box
+- Join button
+
+User ka flow:
+- User meeting code enter karta hai, example: ABC123
+- Click Join button
+- handleJoinVideoCall() call hota hai:
+    await addToUserHistory(meetingCode);
+    navigate(`/${meetingCode}`);
+
+Meaning:
+- Pehle meeting ko user history me save hota hai
+- Phir route /{meetingCode} par jump hota hai
+
+This means video meeting route dynamic hai.
+
+Example:
+/home -> enter code = xyz123 -> navigate('/xyz123')
+
+
+8) Video meeting route kaise open hota hai?
+------------------------------------------
+File: src/pages/VideoMeet.jsx
+- App.js me path "/:url" set hai.
+- Iska matlab random meeting code ke saath route open ho sakta hai.
+- Jab user /xyz123 route hit hota hai, VideoMeetComponent render hota hai.
+
+Inside VideoMeetComponent:
+- getPermissions() call hota hai
+  - camera permission request
+  - mic permission request
+  - screen share support check
+- local video stream create hota hai
+- socket.io connection setup hota hai
+- remote user connections create hote hain
+- webrtc signals exchange hote hain
+- user can mute/unmute video/audio
+- screen share enable/disable
+- chat functionality
+- copy meeting code option
+
+Important flow:
+/home (meeting input) -> /{meetingCode} -> VideoMeetComponent -> permissions + WebRTC socket setup
+
+
+9) History page workflow
+------------------------
+File: src/pages/history.jsx
+- History page /history route par open hota hai.
+- useEffect() me fetchHistory run hota hai.
+- getHistoryOfUser() call hota hai
+- token ke basis par backend se previous meetings fetch hote hain.
+- Response setMeetings(history) me store hota hai.
+- UI me list show hoti hai.
+
+Example:
+/history
+  |
+  v
+useEffect -> getHistoryOfUser()
+  |
+  v
+fetch data from backend
+  |
+  v
+render cards with Meeting Code + Date
+
+Can navigate back to /home using Home button.
+
+
+10) Logout kaise hota hai?
+-------------------------
+File: src/pages/home.jsx
+- Logout button click karte hi:
+  localStorage.removeItem("token")
+  navigate("/auth")
+
+Meaning:
+- login state clear ho jata hai
+- user auth page par redirect hota hai
+
+
+11) Full end-to-end workflow chart
+----------------------------------
+START
+  |
+  v
+npm start
+  |
+  v
+index.js
+  |
+  v
+App.js
+  |
+  v
+BrowserRouter + ThemeProvider + AuthProvider
+  |
+  v
+Route checks
+  |
+  +--> / (LandingPage)
+  |      |
+  |      +--> Login button -> /auth
+  |      +--> Register button -> /auth?mode=signup
+  |      +--> Join as Guest -> /aljk23
+  |
+  +--> /auth (Authentication)
+  |      |
+  |      +--> Login form -> handleLogin -> POST /login -> save token -> /home
+  |      +--> Signup form -> handleRegister -> POST /register -> success -> switch to login
+  |
+  +--> /home (withAuth)
+  |      |
+  |      +--> check token exist?
+  |              yes -> render home
+  |              no -> redirect /auth
+  |      |
+  |      +--> Enter meeting code -> addToUserHistory -> navigate /{meetingCode}
+  |
+  +--> /history (withAuth if needed)
+  |      |
+  |      +--> getHistoryOfUser -> GET /get_all_activity -> render previous meetings
+  |
+  +--> /{meetingCode} (VideoMeet)
+         |
+         +--> request camera/mic permission
+         +--> socket connect
+         +--> peer connection setup
+         +--> video/audio call starts
+         +--> chat, mute, screen share, leave call
+
+
+12) Important notes/actual project behavior
+-------------------------------------------
+- User token localStorage me store hota hai, isliye session maintain hoti hai.
+- without token user /home aur /history access nahi kar sakta.
+- Landing page guest join with hardcoded route /aljk23 is possible.
+- Video meet dynamic route uses wildcard /:url.
+- History page only login user ke liye relevant hai.
+- Home page me join karte waqt meeting history me add hoti hai.
+
+
+13) Simple summary in 5 steps
+-----------------------------
+1. App starts and routes load.
+2. User lands on Landing Page.
+3. User login/signup via Authentication page.
+4. Token saved and redirected to Home.
+5. Home -> meeting join -> Video call page -> History page access from home.
+
+
+This is the complete workflow of NeoMeet front-end in simple Hinglish.

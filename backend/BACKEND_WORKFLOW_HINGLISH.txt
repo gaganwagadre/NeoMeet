@@ -1,0 +1,574 @@
+NEOMEET BACKEND FULL WORKFLOW (HINGLISH)
+=========================================
+
+Yeh file backend ke current code ke hisaab se likhi gayi hai.
+Backend folder: backend/
+Server default URL: http://localhost:8000
+Frontend default URL: http://localhost:3000
+
+
+1. PROJECT START KARNE KA FLOW
+------------------------------
+
+Developer terminal mein backend folder par hota hai:
+
+  cd backend
+  npm install              (sirf first time)
+  npm run dev              (development mode)
+
+"npm run dev" actually yeh command chalata hai:
+
+  nodemon src/app.js
+
+Production/simple mode:
+
+  npm start
+
+"npm start" actually yeh command chalata hai:
+
+  node src/app.js
+
+
+STARTUP KA EXACT ORDER
+----------------------
+
+1. Node.js `src/app.js` ko run karta hai.
+2. `dotenv.config()` `.env` file ke variables load karta hai:
+   - MONGODB_URI
+   - PORT
+   - FRONTEND_URL
+3. Express application create hoti hai.
+4. HTTP server create hota hai.
+5. Socket.io isi HTTP server par attach hota hai.
+6. CORS, JSON parser aur URL encoded parser middleware load hote hain.
+7. User routes register hote hain:
+
+      /api/v1/users
+
+8. MongoDB connection start hota hai.
+9. Agar MONGODB_URI missing/invalid ho, server exit ho jata hai.
+10. MongoDB connect hone ke baad server PORT par listen karta hai.
+11. Terminal mein normally yeh messages dikhte hain:
+
+      MongoDB connected successfully
+      Server is listening on port 8000
+
+IMPORTANT:
+Server MongoDB connect hone se pehle listen nahi karta.
+
+
+2. BASIC HEALTH CHECK / PING FLOW
+---------------------------------
+
+Browser/Postman se:
+
+  GET http://localhost:8000/
+
+Response:
+
+  {
+    "message": "NeoMeet API Server",
+    "status": "Running",
+    "version": "1.0.0"
+  }
+
+Simple test route:
+
+  GET http://localhost:8000/home
+
+Response:
+
+  Hello World!
+
+Agar `/` ka response aa raha hai, backend HTTP level par running hai.
+
+
+3. COMPLETE USER JOURNEY - HIGH LEVEL CHART
+--------------------------------------------
+
+  User project open karta hai
+          |
+          v
+  Frontend backend ko request bhejta hai
+          |
+          v
+  Express request receive karta hai
+          |
+          v
+  CORS + JSON middleware request process karte hain
+          |
+          v
+  `/api/v1/users` router request ko correct controller deta hai
+          |
+          +-----------------------------+
+          |                             |
+          v                             v
+      Register                         Login
+          |                             |
+          v                             v
+  Password bcrypt hash             Password bcrypt compare
+          |                             |
+          v                             v
+  MongoDB User save                Random token create/save
+          |                             |
+          v                             v
+  "User Registered"                Token frontend ko return
+                                        |
+                                        v
+                         Frontend token store karta hai
+                                        |
+                    +-------------------+------------------+
+                    |                                      |
+                    v                                      v
+             Meeting history                         Video meeting
+             REST API se                              Socket.io se
+                    |                                      |
+                    v                                      v
+             Meeting collection              join-call + signal events
+                                                            |
+                                                            v
+                                                   Chat + participants
+
+
+4. SIGNUP / REGISTER FLOW
+-------------------------
+
+Frontend request:
+
+  POST http://localhost:8000/api/v1/users/register
+
+JSON body:
+
+  {
+    "name": "Gagan",
+    "username": "gagan123",
+    "password": "mypassword"
+  }
+
+EXACT INTERNAL FLOW:
+
+1. Request `/api/v1/users/register` par aati hai.
+2. Router `register` controller ko call karta hai.
+3. Controller request body se `name`, `username`, `password` leta hai.
+4. MongoDB mein same username search hota hai.
+5. Agar username already hai:
+
+      HTTP 302
+      { "message": "User already exists" }
+
+6. Agar username new hai, password ko bcrypt se hash kiya jata hai.
+7. New User document banta hai:
+
+      name
+      username
+      hashed password
+      token empty
+
+8. User MongoDB ke `users` collection mein save hota hai.
+9. Response:
+
+      HTTP 201
+      { "message": "User Registered" }
+
+IMPORTANT:
+Plain password database mein save nahi hota; bcrypt hash save hota hai.
+
+
+5. LOGIN FLOW
+-------------
+
+Frontend request:
+
+  POST http://localhost:8000/api/v1/users/login
+
+JSON body:
+
+  {
+    "username": "gagan123",
+    "password": "mypassword"
+  }
+
+EXACT INTERNAL FLOW:
+
+1. Request login route par aati hai.
+2. Controller check karta hai ki username aur password diye gaye hain ya nahi.
+3. Missing field ho to:
+
+      HTTP 400
+      { "message": "Please Provide" }
+
+4. Username se MongoDB User search hota hai.
+5. User nahi mila to:
+
+      HTTP 404
+      { "message": "User Not Found" }
+
+6. User milne par bcrypt plain password ko saved hash se compare karta hai.
+7. Password galat ho to:
+
+      HTTP 401
+      { "message": "Invalid Username or password" }
+
+8. Password correct ho to crypto se random token generate hota hai.
+9. Token user document mein save hota hai.
+10. Token frontend ko milta hai:
+
+      HTTP 200
+      { "token": "random_token_string" }
+
+11. Frontend ko is token ko future history requests mein bhejna hota hai.
+
+IMPORTANT:
+Current code JWT use nahi karta. `JWT_SECRET` .env mein hai, lekin current
+login flow random crypto token use karta hai.
+
+
+6. TOKEN KA USE
+---------------
+
+Login ke baad token database ke User document mein save hota hai.
+Current backend token ko middleware se automatically verify nahi karta.
+History controllers token se user find karte hain.
+
+Token lookup ka logic:
+
+  User.findOne({ token: token })
+
+Isliye frontend ko same login token exactly bhejna hota hai.
+
+
+7. MEETING CREATE/JOIN KA FLOW
+------------------------------
+
+Current backend mein meeting room create karne ka alag REST endpoint nahi hai.
+Frontend ek meeting code/path banata hai aur Socket.io ke `join-call` event
+ke through room join karta hai.
+
+Socket connection:
+
+  Frontend Socket.io se backend server se connect hota hai.
+  Usually connection URL: http://localhost:8000
+
+Client event:
+
+  socket.emit("join-call", meetingCode)
+
+EXACT INTERNAL FLOW:
+
+1. Socket.io client backend server se connect hota hai.
+2. Backend `connection` event receive karta hai.
+3. Client `join-call` ke saath meeting path/code bhejta hai.
+4. Backend `connections[path]` array create karta hai agar pehli entry hai.
+5. Current socket ID us room array mein add hoti hai.
+6. Join time `timeOnline[socket.id]` mein save hota hai.
+7. Room ke har connected user ko event milta hai:
+
+      "user-joined", socket.id, connections[path]
+
+8. Agar room ke old chat messages hain, new user ko woh messages one-by-one
+   `chat-message` event se bheje jate hain.
+
+Simple room chart:
+
+  Meeting code: ABC123
+          |
+          +-- User A socket id
+          +-- User B socket id
+          +-- User C socket id
+
+Room state memory mein hoti hai; server restart hone par connections/messages
+clear ho jate hain.
+
+
+8. VIDEO/AUDIO WEBRTC SIGNAL FLOW
+---------------------------------
+
+Socket.io media stream khud carry nahi karta. Socket.io sirf WebRTC signaling
+messages forward karta hai.
+
+Client A:
+
+  socket.emit("signal", targetSocketId, message)
+
+Backend:
+
+  io.to(targetSocketId).emit("signal", senderSocketId, message)
+
+Client B:
+
+  `signal` event receive karta hai aur WebRTC peer connection update karta hai.
+
+Typical flow:
+
+  User A browser camera/mic access karta hai
+          |
+          v
+  WebRTC offer/answer/ICE message banta hai
+          |
+          v
+  `signal` event se Socket.io par backend ko jata hai
+          |
+          v
+  Backend target socket ko message forward karta hai
+          |
+          v
+  User B ka browser WebRTC connection complete karta hai
+          |
+          v
+  Audio/video browser-to-browser stream hoti hai
+
+Backend current code media ko database mein save nahi karta.
+
+
+9. CHAT MESSAGE FLOW
+--------------------
+
+Client event:
+
+  socket.emit("chat-message", data, sender)
+
+EXACT INTERNAL FLOW:
+
+1. Backend current socket ID se matching room search karta hai.
+2. Room milne par `messages[room]` array create hoti hai, agar zaroorat ho.
+3. Message memory mein save hota hai:
+
+      sender
+      data
+      socket-id-sender
+
+4. Room ke sabhi sockets ko event broadcast hota hai:
+
+      "chat-message", data, sender, socket.id
+
+5. Room mein baad mein join karne wale user ko old messages mil jate hain.
+6. Server restart hone par in-memory chat messages delete ho jate hain.
+
+
+10. USER LEAVE / DISCONNECT FLOW
+--------------------------------
+
+1. Browser socket disconnect karta hai ya user meeting close karta hai.
+2. Backend `disconnect` event receive karta hai.
+3. Backend socket ID ko sabhi rooms mein search karta hai.
+4. Room ke remaining users ko event milta hai:
+
+      "user-left", disconnectedSocketId
+
+5. Socket room array se remove hoti hai.
+6. Room empty ho to `connections[room]` delete ho jata hai.
+
+
+11. MEETING HISTORY SAVE FLOW
+-----------------------------
+
+Meeting join karna automatically history mein save nahi karta.
+Frontend ko alag se endpoint call karna hota hai.
+
+Request:
+
+  POST http://localhost:8000/api/v1/users/add_to_activity
+
+JSON body:
+
+  {
+    "token": "login_token",
+    "meeting_code": "ABC123"
+  }
+
+EXACT FLOW:
+
+1. Controller token se user find karta hai.
+2. User ke username ke saath new Meeting document banta hai.
+3. Meeting MongoDB ke `meetings` collection mein save hoti hai:
+
+      user_id      = user.username
+      meetingCode  = meeting_code
+      date         = current date/time
+
+4. Response:
+
+      HTTP 201
+      { "message": "Added code to history" }
+
+IMPORTANT:
+Current code mein token invalid hone par explicit 401 check nahi hai. Aise
+case mein error response aa sakta hai.
+
+
+12. MEETING HISTORY DEKHNE KA FLOW
+----------------------------------
+
+Request:
+
+  GET http://localhost:8000/api/v1/users/get_all_activity?token=login_token
+
+EXACT FLOW:
+
+1. Controller query string se token leta hai.
+2. Token se user find hota hai.
+3. User ke username ke basis par meetings search hoti hain.
+4. Meeting list JSON mein return hoti hai.
+
+Example:
+
+  [
+    {
+      "_id": "...",
+      "user_id": "gagan123",
+      "meetingCode": "ABC123",
+      "date": "2026-09-22T..."
+    }
+  ]
+
+
+13. API ROUTES QUICK TABLE
+--------------------------
+
+Method  Endpoint                                      Purpose
+------  --------------------------------------------  --------------------------
+GET     /                                             Server health check
+GET     /home                                         Simple test response
+POST    /api/v1/users/register                        New user signup
+POST    /api/v1/users/login                           User login + token
+POST    /api/v1/users/add_to_activity                 Save meeting history
+GET     /api/v1/users/get_all_activity?token=TOKEN    Read meeting history
+
+
+14. DATABASE MODELS
+-------------------
+
+MongoDB database connection `.env` ke `MONGODB_URI` se hoti hai.
+
+User model (`users` collection):
+
+  name       String, required
+  username   String, required, unique
+  password   String, required (bcrypt hash)
+  token      String
+
+Meeting model (`meetings` collection):
+
+  user_id      String
+  meetingCode  String, required
+  date         Date, default current time
+
+
+15. COMPLETE REAL-LIFE EXAMPLE
+------------------------------
+
+A. Server start:
+
+  `npm run dev`
+  MongoDB connected
+  Server localhost:8000 par ready
+
+B. Signup page:
+
+  POST /api/v1/users/register
+  User MongoDB mein create
+
+C. Login page:
+
+  POST /api/v1/users/login
+  Backend token return karta hai
+  Frontend token store karta hai
+
+D. Dashboard/home page:
+
+  GET /api/v1/users/get_all_activity?token=TOKEN
+  Previous meeting list show hoti hai
+
+E. User meeting code enter karta hai:
+
+  Socket.io connect
+  `join-call` with meeting code
+  Participants ko `user-joined`
+
+F. Camera/mic permission:
+
+  Browser local media stream leta hai
+  WebRTC signaling `signal` events se hoti hai
+
+G. Chat:
+
+  `chat-message` event send
+  Backend room ke sabhi users ko broadcast karta hai
+
+H. Meeting finish:
+
+  Frontend `add_to_activity` call karke meeting save karta hai
+  Socket disconnect hota hai
+  Remaining users ko `user-left` milta hai
+
+I. History page:
+
+  GET `get_all_activity`
+  MongoDB se meeting list return hoti hai
+
+
+16. ERROR / DEBUG CHECKLIST
+---------------------------
+
+Problem: Server start nahi hota
+Check:
+  - `.env` mein valid MONGODB_URI hai?
+  - MongoDB network access allowed hai?
+  - Port 8000 already busy to nahi?
+
+Problem: Frontend request block hoti hai
+Check:
+  - FRONTEND_URL correct hai?
+  - Frontend actual port 3000 hai?
+  - Request backend port 8000 par ja rahi hai?
+
+Problem: Signup fail hota hai
+Check:
+  - name, username, password body mein hain?
+  - username pehle se registered to nahi?
+  - MongoDB connected hai?
+
+Problem: Login fail hota hai
+Check:
+  - username exact same hai?
+  - password correct hai?
+  - Signup successfully complete hua tha?
+
+Problem: History empty/error
+Check:
+  - Login ka latest token bheja ja raha hai?
+  - `meeting_code` save endpoint par bheja gaya?
+  - User token database mein present hai?
+
+Problem: Video users connect nahi ho rahe
+Check:
+  - Socket.io URL backend `http://localhost:8000` hai?
+  - Dono users same meeting code/path use kar rahe hain?
+  - Browser camera/mic permission allowed hai?
+  - Frontend `signal` event handle kar raha hai?
+
+
+17. ONE-LINE MASTER WORKFLOW
+----------------------------
+
+Start app -> Load env -> Create Express + Socket.io -> Connect MongoDB ->
+Listen on port -> Register/Login through REST -> Receive token ->
+Join meeting through Socket.io -> WebRTC signaling through `signal` ->
+Chat through `chat-message` -> Leave through `disconnect` ->
+Save/read meeting history through REST + MongoDB.
+
+
+18. IMPORTANT CURRENT CODE NOTES
+---------------------------------
+
+1. Current authentication token random crypto token hai, JWT nahi.
+2. Token authentication middleware nahi bana hua; controllers directly token
+   se user search karte hain.
+3. Video/audio backend se store nahi hota; WebRTC browser-to-browser hota hai.
+4. Socket connections aur chat messages RAM/in-memory objects mein hain.
+5. Server restart hone par active rooms aur in-memory chat messages clear ho
+   jate hain.
+6. Meeting history alag REST call se save hoti hai; join-call alone history
+   save nahi karta.
+7. `.env` ko public GitHub par commit nahi karna chahiye, kyunki isme database
+   credentials hote hain.
